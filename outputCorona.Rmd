@@ -1,0 +1,940 @@
+---
+title: "Covid-19 Analysis"
+author: "Willem van der Schans"
+output:
+  html_document:
+    fig_height: 6
+    fig_width: 10
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    toc: yes
+    toc_depth: 3
+---
+
+<style type="text/css">
+
+
+h1 { /* Header 1 */
+  font-size: 35px;
+  color: Black;
+  text-align: center;
+  margin-top: 50px;
+  margin-bottom: 25px;
+}
+h2 { /* Header 2 */
+    font-size: 30px;
+  color: Black;
+  text-align: center;
+  text-decoration: underline;
+  margin-top: 250px;
+}
+h3 { /* Header 3 */
+    font-size: 22px;
+  color: Black;
+  text-align: center;
+  margin-top: 25px;
+}
+h4 { /* Header 4 */
+    font-size: 22px;
+    color: Black;
+    text-align: center;
+    margin-top: 100px;
+    margin-bottom: 50px;
+}
+}
+pre { /* Code block - determines code spacing between lines */
+    font-size: 12px;
+}
+</style>
+
+```{r setup,  include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = FALSE)
+options(scipen=999)
+```
+
+```{r website, eval=F}
+# Upload Data to Website
+
+rmarkdown:::render("C:/Users/wille/OneDrive/MSF&MSBA/Kaggle/Corona/outputCorona.Rmd",
+       output_format = "html_document",
+       output_options = c("self_contained = TRUE"),
+       quiet = TRUE)
+ftpUpload("C:/Users/wille/OneDrive/MSF&MSBA/Kaggle/Corona/outputCorona.html",
+       'ftp://Logon:Password@files.000webhost.com////public_html/Corona/outputCorona.html')
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(reshape2)
+library(naniar)
+library(ggthemes)
+library(ggplot2)
+library(lattice)
+library(GGally)
+library(magrittr)
+library(plotly)
+library(imager)
+library(MASS)
+library(DescTools)
+library(quantable)
+library(forecast)
+library('data.table')
+library("tictoc")
+library(ggrepel)
+library(knitr)
+library(kableExtra)
+library(RCurl)
+library(countrycode)
+library(lubridate)
+library(compare)
+```
+
+```{r timining start}
+### Start timing of code 
+tic()
+```
+
+```{r updated}
+print(paste("Webpage last updated at:", format(Sys.time(), "%A %B %d %Y %X"), "|", "timezone:", Sys.timezone(), sep = " "))
+```
+
+```{r data download, eval=T}
+### Automatically download data
+download.file("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv", "time_series_covid19_confirmed_global.csv")
+
+download.file("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv", "time_series_covid19_deaths_global.csv")
+
+download.file("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_recovered_global.csv", "time_series_covid19_recovered_global.csv")
+```
+
+```{r data loading}
+### Load Code book and Data
+df_deaths <- read.csv("time_series_covid19_deaths_global.csv", stringsAsFactors = F, check.names=FALSE)
+df_deaths <- df_deaths[-1,]
+df_confirmed <- read.csv("time_series_covid19_confirmed_global.csv", stringsAsFactors = F, check.names=FALSE)
+df_confirmed <- df_confirmed[-1,]
+df_recovered <- read.csv("time_series_covid19_recovered_global.csv", stringsAsFactors = F, check.names=FALSE)
+df_recovered  <- df_recovered [-1,]
+df_beds <- read.csv("hospitalbeds.csv", stringsAsFactors = F)
+population <- read.csv("population.csv", stringsAsFactors = F)
+```
+
+```{r population data 0}
+## Data Optimization
+
+# Population Data
+population$Time <- as.factor(population$Time)
+
+population <-  subset(population, Variant == "Medium" & Time == 2020, c("Location","PopTotal"))
+population$PopTotal <- population$PopTotal*1000
+population$Location[population$Location == "United States of America"] <- "United States"
+population$Location <- as.factor(population$Location)
+
+# Reshape Downloaded data
+names <- colnames(df_confirmed)
+names <- names[c(-1,-2,-3,-4)]
+maxrows <- nrow(df_confirmed)*length(names)
+
+df_confirmed <- reshape(df_confirmed, 
+  varying = c(names), 
+  v.names = "confirmed",
+  timevar = "Date", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+df_confirmed <- df_confirmed[-7]
+
+names <- colnames(df_deaths)
+names <- names[c(-1,-2,-3,-4)]
+maxrows <- nrow(df_deaths)*length(names)
+
+df_deaths <- reshape(df_deaths, 
+  varying = c(names), 
+  v.names = "deaths",
+  timevar = "Date", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+df_deaths <- df_deaths[-7]
+
+names <- colnames(df_recovered)
+names <- names[c(-1,-2,-3,-4)]
+maxrows <- nrow(df_recovered)*length(names)
+
+df_recovered <- reshape(df_recovered, 
+  varying = c(names), 
+  v.names = "recovered",
+  timevar = "Date", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+df_recovered <- df_recovered[-7]
+
+### Exit Knitting early if files have not been updates properly
+df_deaths_lenght <- as.numeric(nrow(df_deaths))
+df_confirmed_lenght <- as.numeric(nrow(df_confirmed))
+df_deaths_date <- max(levels(as.factor(as.Date(df_deaths$Date,"%m/%d/%y"))))
+
+if (df_deaths_lenght == df_confirmed_lenght){
+  print(paste("Last data update at", df_deaths_date, sep = " "))
+} else {
+  stop("Warning: One Data file is not yet updated, try again later")
+}
+
+rm(df_deaths_lenght, df_confirmed_lenght, df_deaths_date)
+### Combine Data of Confirmed Cases and Deaths
+df <- df_confirmed %>% 
+  mutate(confirmed = df_confirmed$confirmed,
+         deaths = df_deaths$deaths)
+
+df$Date <- as.Date(df$Date, "%m/%d/%y")
+#df$Date <- as.factor(df$Date)
+df$confirmed <- as.numeric(df$confirmed)
+df$deaths <- as.numeric(df$deaths)
+df_recovered <- df_recovered[,c(1,2,5,6)]
+df_recovered$Date <- as.Date(df_recovered$Date, "%m/%d/%y")
+df_recovered$Date <- as.factor(df_recovered$Date)
+
+df <- merge(df, df_recovered, by=c("Date", "Country/Region", "Province/State"))
+
+rm(df_confirmed,df_deaths, df_recovered)
+```
+
+
+```{r population data 1}
+date <- df$Date
+
+df <- df[-1]
+### Impute Na's
+df <- df %>% mutate_all(na_if,"")
+
+df$`Province/State` <- replace_na(df$`Province/State`,"None")
+
+df$Date <- date
+
+df <- df[, c(8,1,2,3,4,5,6,7)]
+```
+
+
+```{r data beds}
+# Hospital Beds
+
+### Reshape Data for Hospital Beds
+names <- colnames(df_beds)
+names <- names[c(-1,-2,-3,-4)]
+maxrows <- nrow(df_beds)*length(names)
+
+df_beds_2 <- reshape(df_beds, 
+  varying = c(names), 
+  v.names = "hospital_beds",
+  timevar = "year", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+#df_beds$year <- sub('.', '', df_beds$year)
+bu <- df_beds[,c(1,2)]
+
+rm(df_beds)
+
+df_beds <- data.frame(country_name=as.factor(df_beds_2$ï..Country.Name),
+                      country_code = bu$Country.Code,
+                 year=as.factor(sub('.', '', df_beds_2$year)), 
+                 hospital_beds_1000=df_beds_2$hospital_beds, 
+                 stringsAsFactors=FALSE)
+
+df_beds <- dcast(df_beds, year ~ country_name, value.var="hospital_beds_1000")
+row.names(df_beds) <- df_beds$year
+df_beds <- df_beds[,-1]
+
+rm(df_beds_2, maxrows, names)
+
+### Find last found value for hospital beds available and optimize
+df_beds_last <- sapply(df_beds, function(x) x[max(which(!is.na(x)))])
+
+df_beds_last <- as.data.frame(df_beds_last)
+
+rm(df_beds)
+
+### Optimize data and create country abbreviations for labels
+df_beds_last <- df_beds_last %>% drop_na(df_beds_last) 
+
+df_beds_last$hospital_beds <- df_beds_last$df_beds_last 
+
+names <- colnames(df_beds_last)
+names <- names[2]
+
+df_beds_last <- subset(df_beds_last, select = names)
+
+rm(names)
+
+df_beds_last$country <- row.names(df_beds_last)
+rownames(df_beds_last) <- 1:nrow(df_beds_last)
+
+# Abbreviations 
+df_beds_last <- merge(df_beds_last, bu, by.x="country", by.y="ï..Country.Name")
+
+df_beds_last <- df_beds_last[,c(1,3,2)]
+df_beds_last$country <- as.factor(df_beds_last$country)
+
+rm(bu)
+
+### Find conversion numbers from hospital beds to IC beds
+conversion_nl <- 2065/37735
+
+conversion_usa <- 50000/(2.9*(360000000/1000))
+
+conversion <- ((conversion_nl+conversion_usa)/2)*.3
+
+df_beds_last <- df_beds_last %>% mutate(ic_beds = hospital_beds*conversion)
+
+rm(conversion, conversion_nl, conversion_usa)
+
+### Attach Population Data to Hospital bed Data frame
+df_beds_last <- merge(df_beds_last, population, by.x="country", by.y="Location")
+
+df_beds_last <- df_beds_last %>%  mutate(hospital_beds_total = hospital_beds*(PopTotal/1000), 
+                       ic_beds_total = ic_beds*(PopTotal/1000))
+
+df_beds_last <- df_beds_last[!(df_beds_last$country %in% c("World", "Sub-Saharan Africa")), ]
+
+### Pandemic Metric Generation
+us_pop <- population$PopTotal[population$Location == "United States"]
+moderate_hos_us <- 1000000
+moderate_ic_us <- 200000
+severe_hos_us <- 9600000
+severe_hos_ic <- 2900000
+
+con_mod_hos <- moderate_hos_us/us_pop
+con_mod_ic <- moderate_ic_us/us_pop
+
+con_sev_hos <- severe_hos_us/us_pop
+con_sev_ic <- severe_hos_ic/us_pop
+
+#http://www.centerforhealthsecurity.org/cbn/2020/cbnreport-02272020.html
+
+### Caclulate Infection Curve
+Months <- 4
+Weeks <- 4.5
+
+std <- Weeks/(Months*4)
+peak <- -pnorm(-std)+pnorm(std)
+
+
+df_beds_last <- df_beds_last %>% mutate(hospital_beds_moderate = PopTotal*con_mod_hos, 
+                        ic_beds_moderate = PopTotal*con_mod_ic, 
+                        hospital_beds_severe = PopTotal*con_sev_hos, 
+                        ic_beds_severe = PopTotal*con_sev_ic, 
+                        shortage_hos_mod = hospital_beds_moderate*peak - hospital_beds_total,
+                        shortage_ic_mod = ic_beds_moderate*peak- ic_beds_total,
+                        shortage_IC_Mod_Pat = shortage_ic_mod/ic_beds_moderate*1000,
+                        shortage_hos_sev = hospital_beds_severe*peak- hospital_beds_total,
+                        shortage_ic_sev = ic_beds_severe*peak- ic_beds_total,
+                        shortage_IC_Sev_Pat = shortage_ic_sev/ic_beds_severe*1000,
+                        Country.Code = as.factor(Country.Code))
+
+#rm(us_pop,moderate_hos_us,moderate_ic_us,severe_hos_us,severe_hos_ic,con_mod_hos,con_mod_ic,con_sev_hos,con_sev_ic)
+#rm(std,peak, Months, Weeks)
+
+
+```
+
+```{r}
+rm(population)
+```
+
+
+```{r}
+# Find Continents for geographic Data
+df_beds_last$continent <- as.factor(countrycode(sourcevar = df_beds_last[, "country"],
+                            origin = "country.name",
+                            destination = "continent"))
+
+df$continent <- as.factor(countrycode(sourcevar = df[, "Country/Region"],
+                            origin = "country.name",
+                            destination = "continent"))
+```
+
+
+```{r no China and russia}
+# Remove certain countries and NA's
+df$continent <- replace_na(df$continent,"None")
+df <- subset(df, df$continent != "None")
+
+df_no_china <- subset(df, df$`Country/Region` != "China")
+df_beds_last<- subset(df_beds_last, df_beds_last$country != "Russian Federation")
+```
+
+```{r tables}
+#Table prep Code
+table_1_no_china <- df_no_china %>%
+    group_by(.dots=c("Date")) %>% 
+    summarize(cases_confirmed =sum(confirmed, na.rm = T),
+              cases_recovered = sum(recovered, na.rm=T),
+              cases_dead = sum(deaths, na.rm = T), 
+              current_active = sum(confirmed, na.rm = T) - sum(recovered, na.rm=T) - sum(deaths, na.rm = T),
+              recovery_rate = round(sum(recovered, na.rm=T)/sum(confirmed,na.rm = T)*100,2),
+              death_rate = round(sum(deaths, na.rm = T)/sum(confirmed, na.rm = T)*100,2))
+
+starting_date <- min(table_1_no_china$Date)
+
+
+for (row in 1:nrow(table_1_no_china)) {
+
+    if(table_1_no_china$Date[row] == starting_date ) {
+      table_1_no_china[row, "newly_confirmed"] = table_1_no_china[row, "cases_confirmed"]
+    }
+    else{
+      table_1_no_china[row, "newly_confirmed"] = table_1_no_china[row, "cases_confirmed"] - table_1_no_china[row-1, "cases_confirmed"]
+   }
+}
+
+# Table 2 Prep Code
+table_2 <- df %>%  
+  subset(df$confirmed > 500) %>%
+  group_by(.dots=c("`Country/Region`", "continent")) %>% 
+  summarize(cases_confirmed = round(max(confirmed),0),
+            cases_recovered = sum(recovered, na.rm=T),
+            current_active = sum(confirmed, na.rm = T) - sum(recovered, na.rm=T) - sum(deaths, na.rm = T),
+            cases_dead = round(max(deaths),0),
+            recovery_rate = round(sum(recovered, na.rm=T)/sum(confirmed,na.rm = T)*100,2),
+            death_rate = round(sum(deaths, na.rm = T)/sum(confirmed, na.rm = T)*100,2)) %>% 
+  arrange(desc(cases_confirmed))
+
+# Table 3 Prep Code
+table_3 <- data.frame(country = df_beds_last$country,
+                      Continent = df_beds_last$continent,
+                      Population = round(df_beds_last$PopTotal,0),
+                      Tot_Hospital_beds = round(df_beds_last$hospital_beds_total,0),
+                      Tot_IC_beds = round(df_beds_last$ic_beds_total,0),
+                      Shortage_IC_Mod = round(df_beds_last$shortage_ic_mod,0),
+                      shortage_IC_Mod_Pat = round(df_beds_last$shortage_IC_Mod_Pat,0),
+                      Shortage_IC_Sev = round(df_beds_last$shortage_ic_sev,0), 
+                      shortage_IC_Sev_Pat = round(df_beds_last$shortage_IC_Sev_Pat,0)) %>% 
+  arrange(Continent, desc(Population))
+```
+
+```{r forecasting prep}
+#Forecasting Variable Prep Code
+period <- 14
+yesterday <- max(table_1_no_china$Date)
+datepositioning <- Sys.Date()-15
+```
+
+```{r reshaping, eval=F}
+# Create DF Data frame in Long-Format
+names <- colnames(df)
+names <- names[c(-1,-2,-3,-4, -5)]
+maxrows <- nrow(df)*length(names)
+
+df_long <- reshape(df, 
+  varying = c(names), 
+  v.names = "Value",
+  timevar = "Situation", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+df_long$Date_int <- as.integer(df_long$Date)
+df_long$Situation <- as.factor(df_long$Situation)
+df_long <- df_long[-c(1,3,4,8)]
+
+# Create Df_no_china in Long format
+names <- colnames(df_no_china)
+names <- names[c(-1,-2,-3,-4, -5)]
+maxrows <- nrow(df_no_china)*length(names)
+
+df_long_no_China <- reshape(df_no_china, 
+  varying = c(names), 
+  v.names = "Value",
+  timevar = "Situation", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+df_long_no_China$Date_int <- as.integer(df_long_no_China$Date)
+df_long_no_China$Situation <- as.factor(df_long_no_China$Situation)
+df_long_no_China <- df_long_no_China[-c(1,3,4,8)]
+```
+
+###### Main data source is the Johns Hopkins School of Public Health
+
+# Visualization of Current Data
+
+### Logarithmic Overview
+
+```{r}
+x <- df_no_china %>% 
+  group_by(.dots=c("Date")) %>% 
+   summarize (Confirmed = sum(confirmed), 
+              Deaths = sum(deaths), 
+              Recovered = sum(recovered), 
+              Currently_Active = Confirmed - Deaths - Recovered) %>% 
+  ggplot(aes(x=Date, y=Confirmed, group= 1)) +
+  geom_line(size=1, col="#4e79a7") +
+  geom_line(aes(x=Date, y=Deaths), size = 1, col="#e15759") +
+  geom_line(aes(x=Date, y=Recovered), size = 1, col="#59a14f") +
+  geom_line(aes(x=Date, y=Currently_Active), size = 1, col="#f28e2b") +
+  theme_fivethirtyeight() +
+  labs(x = "Date", y = "Confirmed Cases", title = paste("Worldwide Confirmed Cases as of",yesterday, "Excluding China", sep=" "), subtitle = "Blue = Confirmed Cases, Red = Deaths, Orange = Currently Active, Green = Recovered") +
+  scale_color_tableau() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8)) +
+  scale_y_log10()
+  
+
+#ggplotly(x)
+x
+```
+
+```{r}
+table_5 <- subset(table_1_no_china, table_1_no_china$Date == as.character(yesterday))
+
+kable(table_5,format.args = list(big.mark = ","), align='cccccccc') %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+```
+
+```{r}
+x<- df %>% 
+  group_by(.dots=c("Date", "continent")) %>% 
+   summarize (Confirmed = sum(confirmed)) %>% 
+  ggplot(aes(x=Date, y=Confirmed, group=continent, color=continent)) +
+  geom_line(size=1) +
+  theme_fivethirtyeight() +
+  labs(x = "Date", y = "Confirmed Cases", title = paste("Confirmed Cases per Continent as of",yesterday, sep=" ")) +
+  scale_y_log10() +
+  scale_color_tableau() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8))
+
+#ggplotly(x)
+x
+```
+
+```{r}
+table_4 <- df %>% 
+  group_by(.dots=c("continent", "Date")) %>% 
+   summarize(Current_Confirmed = sum(confirmed),
+             Current_Deaths = sum(deaths), 
+             Death_Rate = round(Current_Deaths/Current_Confirmed*100,2))
+
+table_4 <- subset(table_4, table_4$Date == as.character(yesterday))
+table_4 <- subset(table_4)
+
+table_4 <- table_4 %>% arrange(desc(Current_Confirmed))
+
+kable(table_4,format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+```
+
+
+### Confirmed Cases and Dead Cases non Logarithmic
+
+```{r}
+x<- df_no_china %>% 
+  group_by(.dots=c("Date")) %>% 
+   summarize (Confirmed = sum(confirmed), 
+              Deaths = sum(deaths)) %>% 
+  ggplot(aes(x=Date, y=Confirmed, group= 1)) +
+  geom_line(size=1, col="#00bfc4") +
+  geom_line(aes(x=Date, y=Deaths), size = 1, col="#f8766d") + 
+  theme_fivethirtyeight() +
+  labs(x = "Date", y = "Confirmed Cases", title = paste("Worldwide Confirmed Cases as of",yesterday, "Excluding China", sep=" "), subtitle = "Blue = Total Confirmed Cases") +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8))
+
+#ggplotly(x)
+x
+```
+
+```{r}
+table_5 <- df_no_china %>% 
+  group_by(.dots=c("Date")) %>% 
+   summarize(Current_Confirmed = sum(confirmed),
+             Current_Deaths = sum(deaths), 
+             Death_Rate = round(Current_Deaths/Current_Confirmed*100,2))
+
+table_5 <- subset(table_5, table_5$Date == as.character(yesterday))
+table_5 <- subset(table_5)
+
+table_5 <- table_5 %>% arrange(desc(Current_Confirmed))
+
+kable(table_5,format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
+```
+
+
+### Newly Confirmed Cases per Day
+
+```{r}
+table_1_no_china %>%  
+  group_by("Date") %>% 
+  ggplot(aes(x=Date, y=newly_confirmed, fill=newly_confirmed)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(newly_confirmed, digits = 0)), position=position_stack(vjust = .5), color = "black", size = 2, angle=90,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Date", y = "Newly Confirmed Cases", title = "Newly Confirmed Cases per Day Worldwide excluding china") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8)) +
+  scale_fill_gradient_tableau()
+```
+
+# Forecasting of Cases
+
+<center> Forecasting is done over a log transformed time series with ETS(AAN, not damped) with confidence levels of 95, 50, and, 25, 
+
+the data excludes China due to its deviation in time regarding the start of the COVID-19 spead compared to other countries. </center>
+
+### Cases Confirmed
+
+```{r plot data 1, fig.show='hide'}
+confirmedseries <- ts(log(table_1_no_china$cases_confirmed), start=c(2020,22), frequency = 365)
+confirmedseries <- ets(confirmedseries, model = "ZZZ", damped=F)
+
+confirmedseriesforecast <- forecast(confirmedseries, level = c(95), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries <- plot(confirmedseriesforecast)
+
+confirmedseriesforecast <- forecast(confirmedseries, level = c(50), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries2 <- plot(confirmedseriesforecast)
+
+confirmedseriesforecast <- forecast(confirmedseries, level = c(25), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries3 <- plot(confirmedseriesforecast)
+```
+
+
+```{r graph 3}
+timeseriesforecast <- data.frame(fitted2=c(log(table_1_no_china$cases_confirmed), as.numeric(plotseries$mean)), 
+                                 upper2 = c(log(table_1_no_china$cases_confirmed), plotseries$upper), 
+                                 lower2 = c(log(table_1_no_china$cases_confirmed), plotseries$lower),
+                                 upper3 = c(log(table_1_no_china$cases_confirmed), plotseries2$upper), 
+                                 lower3 = c(log(table_1_no_china$cases_confirmed), plotseries2$lower),
+                                 upper4 = c(log(table_1_no_china$cases_confirmed), plotseries3$upper), 
+                                 lower4 = c(log(table_1_no_china$cases_confirmed), plotseries3$lower))
+
+timeseriesforecast <- timeseriesforecast %>% 
+                                 mutate(fitted = (exp(fitted2)-1), 
+                                 upper = (exp(upper2)-1), 
+                                 lower = (exp(lower2)-1), 
+                                 upper50 = (exp(upper3)-1), 
+                                 lower50 = (exp(lower3)-1), 
+                                 upper25 = (exp(upper4)-1), 
+                                 lower25 = (exp(lower4)-1))
+
+max_fitted <- round(exp(timeseriesforecast$fitted2[timeseriesforecast$time == yesterday])-1,0)
+
+timeseriesforecast$time <- c(1:nrow(timeseriesforecast))
+timeseriesforecast$time <- as.Date.numeric(timeseriesforecast$time, origin="2020-01-21")
+
+ggplot(data=timeseriesforecast, aes(x=time, y=fitted)) +
+  geom_line(size=1, alpha=0, inherit.aes = F, aes(x=time, y=upper, xlim=yesterday), color="Gray") +
+  geom_line(size=1, alpha=0, inherit.aes = F, aes(x=time, y=lower, xlim=yesterday), color="Gray") +
+  geom_ribbon(aes(ymin=lower, ymax=upper, xmin=yesterday), alpha=.2, fill="dodgerblue2") +
+  geom_ribbon(aes(ymin=lower50, ymax=upper50, xmin=yesterday), alpha=.5, fill="dodgerblue3") +
+  geom_ribbon(aes(ymin=lower25, ymax=upper25, xmin=yesterday), alpha=.8, fill="dodgerblue4") +
+  geom_line(size=1, inherit.aes = T, color="Blue") +
+  geom_vline(xintercept =yesterday) +
+  geom_point(aes(x=yesterday, y=timeseriesforecast$fitted[timeseriesforecast$time == yesterday]), col="#283d51", size=3) +
+  geom_label(x=datepositioning, y= log(timeseriesforecast$fitted[timeseriesforecast$time == yesterday])*.5, label=paste("Current Date =",yesterday, sep=" ")) +
+  geom_label(x=datepositioning, y= log(timeseriesforecast$fitted[timeseriesforecast$time == yesterday])*.46, label=paste("Current Confirmed =",round(exp(timeseriesforecast$fitted2[timeseriesforecast$time == yesterday])-1,0), sep=" ")) +
+  labs(title = "Forecasting of Confirmed cases logarithmic scale", subtitle = "Forecasting of Confirmed cases Worldwide (excluding china) with a confidence level of 95% and 25%  for the upcoming two weeks", x="Date", y="Number of Confirmed Cases") +
+  scale_y_log10() +
+  theme_fivethirtyeight()
+```
+
+```{r}
+table_6 <- timeseriesforecast %>% 
+  group_by(.dots=c("time")) %>% 
+   summarize(Fitted = round(fitted,0),
+             upper_25 = round(upper25,0), 
+             upper_50 = round(upper50,0), 
+             upper_95 = round(upper,0),
+             lower_25 = round(lower25,0),
+             lower_50 = round(lower50,0),
+             lower_95 = round(lower,0))
+
+table_6 <- subset(table_6, table_6$time >= as.character(yesterday))
+table_6 <- subset(table_6)
+
+csv_name <- paste("C:/Users/wille/OneDrive/MSF&MSBA/Kaggle/Corona/ConfirmedForecast/","confirmed_forecast_", yesterday, ".csv",sep="" )
+write.table(table_6, file = csv_name, fileEncoding = "UTF-8")
+
+table_6 <- table_6 %>% arrange(time)
+
+kable(table_6,format.args = list(big.mark = ",")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center", fixed_thead = T)
+```
+
+
+### Cases Dead
+
+```{r plot data 2, fig.show='hide'}
+table_1_no_china_ts <- table_1_no_china
+
+table_1_no_china_ts$cases_dead[table_1_no_china_ts$cases_dead==0] <- .05
+
+deathseries <- ts(log(table_1_no_china_ts$cases_dead), start=c(2020,22), frequency = 365)
+deathseries <- ets(deathseries, model = "ZZZ", damped=F)
+
+deathseriesforecast <- forecast(deathseries, level = c(95), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries <- plot(deathseriesforecast)
+
+deathseriesforecast <- forecast(deathseries, level = c(50), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries2 <- plot(deathseriesforecast)
+
+deathseriesforecast <- forecast(deathseries, level = c(25), allow.multiplicative.trend=F, find.frequency=T, robust=F, h=period)
+
+plotseries3 <- plot(deathseriesforecast)
+```
+
+
+```{r graph 4}
+timeseriesforecast <- data.frame(fitted2=c(log(table_1_no_china$cases_dead), as.numeric(plotseries$mean)), 
+                                 upper2 = c(log(table_1_no_china$cases_dead), plotseries$upper), 
+                                 lower2 = c(log(table_1_no_china$cases_dead), plotseries$lower), 
+                                 upper3 = c(log(table_1_no_china$cases_dead), plotseries2$upper), 
+                                 lower3 = c(log(table_1_no_china$cases_dead), plotseries2$lower),
+                                 upper4 = c(log(table_1_no_china$cases_dead), plotseries3$upper), 
+                                 lower4 = c(log(table_1_no_china$cases_dead), plotseries3$lower))
+
+
+
+timeseriesforecast <- timeseriesforecast %>% 
+                                 mutate(fitted = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(fitted2[fitted2!="-Inf"])-1)), 
+                                 upper = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(upper2[upper2!="-Inf"])-1)),    
+                                 lower = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(lower2[lower2!="-Inf"])-1)),  
+                                 upper50 = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(upper3[upper3!="-Inf"])-1)),    
+                                 lower50 = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(lower3[lower3!="-Inf"])-1)),
+                                 upper25 = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(upper4[upper3!="-Inf"])-1)),    
+                                 lower25 = c(table_1_no_china$cases_dead[table_1_no_china$cases_dead==0],(exp(lower4[lower3!="-Inf"])-1)))    
+
+timeseriesforecast$time <- c(1:nrow(timeseriesforecast))
+timeseriesforecast$time <- as.Date.numeric(timeseriesforecast$time, origin="2020-01-21")
+
+ggplot(data=timeseriesforecast, aes(x=time, y=fitted)) +
+  geom_line(size=1, alpha=0, inherit.aes = F, aes(x=time, y=upper, xlim=yesterday), color="Gray") +
+  geom_line(size=1, alpha=0, inherit.aes = F, aes(x=time, y=lower, xlim=yesterday), color="Gray") +
+  geom_ribbon(aes(ymin=lower, ymax=upper, xmin=yesterday), alpha=.2, fill="dodgerblue2") +
+  geom_ribbon(aes(ymin=lower50, ymax=upper50, xmin=yesterday), alpha=.4, fill="dodgerblue3") +
+  geom_ribbon(aes(ymin=lower25, ymax=upper25, xmin=yesterday), alpha=.6, fill="dodgerblue4") +
+  geom_line(size=1, inherit.aes = T, color="Blue") +
+  geom_vline(xintercept =yesterday) +
+  geom_point(aes(x=yesterday, y=timeseriesforecast$fitted[timeseriesforecast$time == yesterday]), col="#283d51", size=3) +
+  geom_label(x=datepositioning, y= timeseriesforecast$fitted[timeseriesforecast$time == yesterday]*0.0003, label=paste("Current Date =",yesterday, sep=" ")) +
+  geom_label(x=datepositioning, y= timeseriesforecast$fitted[timeseriesforecast$time == yesterday]*0.00025, label=paste("Current Dead =",round(timeseriesforecast$fitted[timeseriesforecast$time == yesterday],0), sep=" ")) +
+  labs(title = "Forecasting of Death cases", subtitle = "Forecasting of Death cases Worldwide with a confidence level of 95, 50 and 25 for the upcoming two weeks", x="Date", y="Number of Death Cases") +
+  theme_fivethirtyeight() +
+  scale_y_log10()
+
+```
+
+```{r}
+table_7 <- timeseriesforecast %>% 
+  group_by(.dots=c("time")) %>% 
+   summarize(Fitted = round(fitted,0),
+             upper_25 = round(upper25,0), 
+             upper_50 = round(upper50,0), 
+             upper_95 = round(upper,0),
+             lower_25 = round(lower25,0),
+             lower_50 = round(lower50,0),
+             lower_95 = round(lower,0))
+
+table_7 <- subset(table_7, table_7$time >= as.character(yesterday))
+table_7 <- subset(table_7)
+
+csv_name <- paste("C:/Users/wille/OneDrive/MSF&MSBA/Kaggle/Corona/DeathForecast/","death_forecast_", yesterday, ".csv",sep="" )
+write.table(table_7, file = csv_name, fileEncoding = "UTF-8")
+
+table_7 <- table_7 %>% arrange(time)
+
+
+
+kable(table_7,format.args = list(big.mark = ","), align = "c") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center", fixed_thead = T)
+
+
+```
+
+```{r}
+rm(timeseriesforecast, deathseriesforecast, plotseries, confirmedseriesforecast, plotseries2, plotseries3)
+```
+
+
+# Data Visualisation of Hospital and ICU beds
+
+<center> The shortage of hospital and ICU beds is visualized at the peak with a infection curve of 4 months
+
+Once a patients is hospitalized 3-6 weeks recovery time is expected so the mean (4.5) has been taken to visualise the shortage of beads around the peak of the infection curve. The data and assumptions result in a peak on the infection curve between a Standard devition of +- 0.6462 on a Gaussian(Normal) distribution. 
+
+A severe outbreak is classified as having to hospitalize 9,600,000 cases and have 2,900,000 ICU cases in the united states, a moderate outbreak has 1,000,000 and 200,000 cases respectively. this data was obtained from the John hopkins center for health security. These number have then been converted to multipliers based on the US population and then applied to all countries available in the data set to compute both hospital and ICU cases per country for severe and moderate COVID-19 outbreaks.
+
+The higher the number projected the worse the situation is for the country, aka less beds available for the population </center>
+
+```{r color vector}
+color_vec <- df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil")
+
+color_vec$color_vector <- ifelse(color_vec$country == "United States" | color_vec$country == "Netherlands", "red", "black")
+```
+
+
+```{r graph 6}
+color_vector <- arrange(color_vec, desc(shortage_ic_mod))
+colvec <- color_vector$color_vector
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_ic_mod), y=shortage_ic_mod, order=Country.Code,fill=shortage_ic_mod)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_ic_mod, digits = 0)), position=position_stack(vjust = 0.5), color = "Black" , size = 3.5, angle=0,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of ICU beds", title = "Total ICU beds shortage with a moderate COVID-19 Outbreak") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+
+
+```
+
+```{r}
+color_vector <- arrange(color_vec, desc(shortage_IC_Mod_Pat))
+colvec <- color_vector$color_vector
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_IC_Mod_Pat), y=shortage_IC_Mod_Pat, order=Country.Code,fill=shortage_IC_Mod_Pat)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_IC_Mod_Pat, digits = 1)), position=position_stack(vjust = 0.5), color = "black", size = 3, angle=0,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of ICU beds", title = "ICU beds shortage with a Moderate COVID-19 Outbreak per 1000 patients", subtitle = "Shortage of ICU beds per 1000 cases who are in need of ICU beds") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+```
+
+```{r graph 7}
+color_vector <- arrange(color_vec, desc(shortage_ic_sev))
+colvec <- color_vector$color_vector
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_ic_sev), y=shortage_ic_sev, order=Country.Code,fill=shortage_ic_sev)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_ic_sev, digits = 0)), position=position_stack(vjust = 0.5), color = "black", size = 3.5, angle=0,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of ICU beds", title = "Total ICU beds shortage with a Severe COVID-19 Outbreak") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+```
+
+```{r}
+color_vector <- arrange(color_vec, desc(shortage_IC_Sev_Pat))
+colvec <- color_vector$color_vector
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_IC_Sev_Pat), y=shortage_IC_Sev_Pat, order=Country.Code,fill=shortage_IC_Sev_Pat)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_IC_Sev_Pat, digits = 1)), position=position_stack(vjust = 0.5), color = "black", size = 3, angle=0,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of ICU beds", title = "ICU beds shortage with a severe COVID-19 Outbreak per 1000 patients", subtitle = "Shortage of ICU beds per 1000 cases who are in need of ICU beds") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+```
+
+```{r graph 8}
+color_vector <- arrange(color_vec, desc(shortage_hos_mod))
+colvec <- color_vector$color_vector
+
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_hos_mod), y=shortage_hos_mod, order=Country.Code,fill=shortage_hos_mod)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_hos_mod, digits = 0)), position=position_stack(vjust = 0.5), color = "black", size = 4, angle=90,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of hospital beds", title = "Total Hospital beds shortage with a moderate COVID-19 Outbreak") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+```
+
+```{r graph 9}
+color_vector <- arrange(color_vec, desc(shortage_hos_sev))
+colvec <- color_vector$color_vector
+
+
+df_beds_last %>%  
+  group_by(country) %>% 
+  subset(df_beds_last$PopTotal > 10000000 & df_beds_last$PopTotal < 1000000000 & df_beds_last$continent == "Europe" | df_beds_last$country == "United States" | df_beds_last$country == "Canada" | df_beds_last$country == "Brazil") %>% 
+  ggplot(aes(x=reorder(country, -shortage_hos_sev), y=shortage_hos_sev, order=Country.Code,fill=shortage_hos_sev)) +
+  geom_bar( position = "identity", stat = "identity", alpha = 1) +
+  guides(fill=FALSE) +
+  geom_text(aes(label = round(shortage_hos_sev, digits = 0)), position=position_stack(vjust = 0.5), color = "black", size = 4, angle=90,  
+                  inherit.aes = T, check_overlap=T) +
+  labs(x = "Country", y = "Shortage of Hospital beds", title = "Hospital beds shortage with a Severe COVID-19 Outbreak") +
+  theme_fivethirtyeight() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust=.5, size=10, color=colvec)) +
+  scale_fill_gradient_tableau()
+```
+
+```{r}
+rm(color_vec, color_vector, colvec)
+```
+
+
+# Data Tables
+
+### Case per Situations per Date excluding China
+
+```{r table 1 no china output}
+kable(table_1_no_china, format.args = list(big.mark = ","), align = "lccccccc", format = "html") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center", fixed_thead = T)
+```
+
+### Death Rate and Recovery Rate per Country
+
+```{r table 2 output}
+kable(table_2, format.args = list(big.mark = ","), align = "llcccccc", format = "html", padding=50) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center", fixed_thead = T)
+```
+
+```{r table 3 output, eval=F}
+kable(table_3,format.args = list(big.mark = ","), format = "html", padding=50) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center", fixed_thead = T)
+```
+
+```{r timing stop}
+# Stop Timing of Code
+toc()
+```
+
+Future updates:
+
+1. Visualization of infection Curve sensitivity on the max confirmed cases.
+2. Table 2 add population and infections per 1000 people.
+3. Find reliable and regularly updated data set with the amount of recoveries
+4. fix the newly recovered cases of 12th of march 
+5. Extract recovered from https://datahub.io/core/covid-19/r/time-series-19-covid-combined.csv, save as csv. 
+
+
+
