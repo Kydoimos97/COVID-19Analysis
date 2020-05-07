@@ -461,6 +461,131 @@ df_long_no_China$Situation <- as.factor(df_long_no_China$Situation)
 df_long_no_China <- df_long_no_China[-c(1,3,4,8)]
 ```
 
+
+```{r data download US, eval=T}
+### Automatically download data
+download_date <- gsub(" ","-",format(yesterday, "%m %d %Y"))
+
+download.file(paste("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports_us/", download_date, ".csv", sep = ""), "covid19_us.csv")
+
+download.file("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv", "time_series_covid19_confirmed_US.csv")
+
+download.file("https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_deaths_US.csv", "time_series_covid19_deaths_US.csv")
+
+us_covid_last_update <- read.csv("covid19_us.csv", stringsAsFactors = F, check.names=FALSE)
+us_confirmed <- read.csv("time_series_covid19_confirmed_US.csv", stringsAsFactors = F, check.names=FALSE)
+us_deaths <- read.csv("time_series_covid19_deaths_US.csv", stringsAsFactors = F, check.names=FALSE)
+
+# adding the Netherlands
+nld_temp <- df_no_china %>% subset(df_no_china$`Country/Region` == "Netherlands" & df_no_china$`Province/State` == "None" | df_no_china$`Country/Region` == "Italy"| df_no_china$`Country/Region` == "Sweden" | df_no_china$`Country/Region` == "Spain" | df_no_china$`Country/Region` == "Brazil") 
+
+netherlands_confirmed <- nld_temp[c(1,2,6)]
+names(netherlands_confirmed)[2] <- "Province_State"
+names(netherlands_confirmed)[3] <- "cases_confirmed"
+netherlands_confirmed <- netherlands_confirmed[, c(2,1,3)]
+netherlands_confirmed$Date <- as.Date(netherlands_confirmed$Date, "%m/%d/%y", origin="2020-01-22")
+
+netherlands_deaths <- nld_temp[c(1,2,7)]
+names(netherlands_deaths)[2] <- "Province_State"
+names(netherlands_deaths)[3] <- "deaths_confirmed"
+netherlands_deaths <- netherlands_deaths[, c(2,1,3)]
+netherlands_deaths$Date <- as.Date(netherlands_deaths$Date, "%m/%d/%y", origin="2020-01-22")
+
+rm(nld_temp)
+
+
+us_confirmed <- us_confirmed %>% 
+  group_by(Province_State) %>% 
+  summarise_at(vars(12:ncol(us_confirmed)-1),list(sum))
+
+names <- colnames(us_confirmed)
+names <- names[c(-1)]
+maxrows <- nrow(us_confirmed)*length(names)
+
+us_confirmed <- reshape(us_confirmed, 
+  varying = c(names), 
+  v.names = "cases_confirmed",
+  timevar = "Date", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+us_confirmed <- us_confirmed[-4]
+
+us_confirmed$Date <- as.Date(us_confirmed$Date, "%m/%d/%y", origin="2020-01-22")
+
+us_confirmed <- rbind(us_confirmed, netherlands_confirmed)
+
+us_confirmed <- us_confirmed[
+  with(us_confirmed, order(Province_State, Date)),
+]
+
+for (row in 1:nrow(us_confirmed)) {
+
+    if(us_confirmed$Date[row] == starting_date ) {
+      us_confirmed[row, "newly_confirmed"] = us_confirmed[row, "cases_confirmed"]
+    }
+    else{
+      us_confirmed[row, "newly_confirmed"] = us_confirmed[row, "cases_confirmed"] - us_confirmed[row-1, "cases_confirmed"]
+   }
+}
+
+us_confirmed[,-c(1)][us_confirmed[, -c(1)] < 0] <- 0
+
+us_deaths <- us_deaths %>% 
+  group_by(Province_State) %>% 
+  summarise_at(vars(13:ncol(us_deaths)-1),list(sum))
+  
+names <- colnames(us_deaths)
+names <- names[c(-1)]
+maxrows <- nrow(us_deaths)*length(names)
+
+us_deaths<- reshape(us_deaths, 
+  varying = c(names), 
+  v.names = "deaths_confirmed",
+  timevar = "Date", 
+  times = c(names), 
+  new.row.names = 1:maxrows,
+  direction = "long")
+
+us_deaths <- us_deaths[-4]
+
+us_deaths$Date <- as.Date(us_deaths$Date, "%m/%d/%y", origin="2020-01-22")
+
+us_deaths <- rbind(us_deaths, netherlands_deaths)
+
+us_deaths <- us_deaths[
+  with(us_deaths, order(Province_State, Date)),
+]
+
+for (row in 1:nrow(us_deaths)) {
+
+    if(us_deaths$Date[row] == starting_date ) {
+      us_deaths[row, "newly_confirmed_dead"] = us_deaths[row, "deaths_confirmed"]
+    }
+    else{
+      us_deaths[row, "newly_confirmed_dead"] = us_deaths[row, "deaths_confirmed"] - us_deaths[row-1, "deaths_confirmed"]
+   }
+}
+
+
+us_deaths[,-c(1)][us_deaths[, -c(1)] < 0] <- 0
+
+subset_us_confirmed <- us_confirmed %>%  
+  subset(us_confirmed$Province_State == "Utah" | us_confirmed$Province_State == "New York" | us_confirmed$Province_State == "California" | us_confirmed$Province_State == "Texas" | us_confirmed$Province_State == "Italy" | us_confirmed$Province_State == "Spain"| us_confirmed$Province_State == "Brazil"| us_confirmed$Province_State == "Sweden"| us_confirmed$Province_State == "Netherlands")
+
+subset_us_confirmed$Province_State <- factor(subset_us_confirmed$Province_State, levels = c("New York", "California", "Texas", "Utah", "Netherlands", "Italy", "Brazil", "Spain", "Sweden"))
+
+
+subset_us_confirmed <- subset_us_confirmed %>%  group_by(Province_State) %>% mutate(Mean_cases = mean(newly_confirmed))
+
+subset_us_deaths <- us_deaths %>%  
+  subset(us_deaths$Province_State == "Utah" | us_deaths$Province_State == "New York" | us_deaths$Province_State == "California" | us_deaths$Province_State == "Texas" | us_deaths$Province_State == "Italy" | us_deaths$Province_State == "Spain"| us_deaths$Province_State == "Brazil"| us_deaths$Province_State == "Sweden"| us_confirmed$Province_State == "Netherlands")
+  
+subset_us_deaths$Province_State <- factor(subset_us_deaths$Province_State, levels = c("New York", "California", "Texas", "Utah", "Netherlands", "Italy", "Brazil", "Spain", "Sweden"))
+
+```
+
 ###### Main data source is the Johns Hopkins School of Public Health
 
 # Visualization of Current Data
@@ -529,7 +654,6 @@ kable(table_4,format.args = list(big.mark = ",")) %>%
   kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = F, position = "center")
 ```
 
-
 ### Confirmed Cases and Dead Cases non Logarithmic
 
 ```{r}
@@ -580,6 +704,39 @@ table_1_no_china %>%
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8)) +
   scale_fill_gradient_tableau()
 ```
+
+### State level newly Confirmed Cases
+
+```{r}
+subset_us_confirmed %>%  
+  group_by("Date") %>% 
+  ggplot(aes(x=Date, y=newly_confirmed, color=Province_State)) +
+  facet_wrap(~Province_State, scales = "free_y") + 
+  geom_point(position = "identity", stat = "identity", alpha = .8, color="grey") +
+  geom_smooth(se=F, span = .6) +
+  labs(x = "Date", y = "Daily Newly Confirmed Cases", title = "Newly Confirmed Cases in US States and select Countries") +
+  theme_fivethirtyeight() +
+  theme(legend.position = ("none"), strip.text = element_text(size=15), plot.title = element_text(size=22),axis.title.x = element_text(size = 15),    axis.title.y = element_text(size = 15)) +
+  guides(fill=FALSE) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8))
+```
+
+### State level newly Dead Cases
+
+```{r}
+subset_us_deaths %>%  
+  group_by("Date") %>% 
+  ggplot(aes(x=Date, y=newly_confirmed_dead, color=Province_State)) +
+  facet_wrap(~Province_State, scales = "free_y") + 
+  geom_point(position = "identity", stat = "identity", alpha = .8, color="grey") +
+  geom_smooth(se=F, span = .6) +
+  labs(x = "Date", y = "Daily Newly Confirmed Deaths", title = "Newly Confirmed deaths in US States and select Countries") +
+  theme_fivethirtyeight() +
+  theme(legend.position = ("none"), strip.text = element_text(size=15), plot.title = element_text(size=22),axis.title.x = element_text(size = 15),    axis.title.y = element_text(size = 15)) +
+  guides(fill=FALSE) +
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, vjust=.5, size=8))
+```
+
 
 # Forecasting of Cases
 
@@ -900,7 +1057,6 @@ df_beds_last %>%
 ```{r}
 rm(color_vec, color_vector, colvec)
 ```
-
 
 # Data Tables
 
